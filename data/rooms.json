@@ -1,0 +1,30 @@
+{
+  "general": {
+    "name": "General Chat",
+    "password": null,
+    "creator": "system",
+    "users": [],
+    "messages": []
+  },
+  "random": {
+    "name": "Random Talk",
+    "password": null,
+    "creator": "system",
+    "users": [],
+    "messages": []
+  },
+  "tech": {
+    "name": "Tech Talk",
+    "password": null,
+    "creator": "system",
+    "users": [],
+    "messages": []
+  },
+  "ajeeb": {
+    "name": "kia yar",
+    "password": "$2a$10$2Li2r/X97ONygZJkrKgknefN7W8pJ4.YiBA1qUbaSBkcA7UHBu.sy",
+    "creator": "ibraheem",
+    "users": [],
+    "messages": []
+  }
+}
