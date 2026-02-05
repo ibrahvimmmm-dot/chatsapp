@@ -15,57 +15,184 @@ const Chat = ({ username }) => {
   const [isTyping, setIsTyping] = useState(false);
   const [passwordModal, setPasswordModal] = useState(null);
   const [joinError, setJoinError] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState('disconnected');
+  const [retryCount, setRetryCount] = useState(0);
   
   const socketRef = useRef();
   const messagesEndRef = useRef();
   const typingTimeoutRef = useRef();
+  const reconnectTimeoutRef = useRef();
 
-  // Get socket URL from environment or use current origin
+  // Get socket URL with fallbacks
   const getSocketUrl = () => {
+    // Debug info
+    console.log('🔍 Getting socket URL...');
+    console.log('   Current hostname:', window.location.hostname);
+    console.log('   Current origin:', window.location.origin);
+    console.log('   VITE_SOCKET_URL:', import.meta.env.VITE_SOCKET_URL);
+    
+    // Priority 1: Environment variable
     if (import.meta.env.VITE_SOCKET_URL) {
-      return import.meta.env.VITE_SOCKET_URL;
+      const url = import.meta.env.VITE_SOCKET_URL;
+      console.log('✅ Using environment variable:', url);
+      return url;
     }
-    // In development, Vite proxy handles it. In production, use same origin or env var
+    
+    // Priority 2: Local development
+    if (window.location.hostname === 'localhost' || 
+        window.location.hostname === '127.0.0.1' ||
+        window.location.hostname === '') {
+      console.log('🖥️  Local development detected, using localhost:3000');
+      return 'http://localhost:3000';
+    }
+    
+    // Priority 3: Firebase hosting (your app)
+    if (window.location.hostname.includes('firebase') || 
+        window.location.hostname.includes('web.app')) {
+      console.log('🔥 Firebase hosting detected');
+      // For Firebase, we need a publicly accessible backend
+      // This will fail unless you've deployed backend
+      return window.location.origin.replace('https://chat-app-2293e', 'https://your-backend-url');
+    }
+    
+    // Fallback: Try to infer from current location
+    console.log('🌍 Using current origin as fallback');
     return window.location.origin;
   };
 
-  useEffect(() => {
-    console.log('🔗 Connecting to server...');
+  // Initialize socket connection
+  const initializeSocket = () => {
+    console.log('🚀 Initializing socket connection...');
     
+    // Clean up previous socket if exists
+    if (socketRef.current) {
+      console.log('🧹 Cleaning up previous socket connection');
+      socketRef.current.removeAllListeners();
+      socketRef.current.disconnect();
+    }
+
     const socketUrl = getSocketUrl();
-    console.log('Socket URL:', socketUrl);
-    
+    console.log('🔌 Connecting to:', socketUrl);
+    setConnectionStatus('connecting');
+
+    // Create new socket connection
     socketRef.current = io(socketUrl, {
       transports: ['websocket', 'polling'],
       reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+      forceNew: true,
+      query: {
+        clientType: 'web',
+        username: username,
+        timestamp: Date.now()
+      }
     });
 
-    // Connection events
+    // ========== CONNECTION EVENTS ==========
     socketRef.current.on('connect', () => {
-      console.log('✅ Connected to server');
+      console.log('✅ SOCKET CONNECTED!');
+      console.log('   Socket ID:', socketRef.current.id);
+      console.log('   Transport:', socketRef.current.io.engine.transport.name);
       setConnected(true);
+      setConnectionStatus('connected');
+      setRetryCount(0);
+      
+      // Send connection info to server
+      socketRef.current.emit('client_info', {
+        username,
+        userAgent: navigator.userAgent,
+        url: window.location.href,
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    socketRef.current.on('server_connected', (data) => {
+      console.log('✅ Server confirmed connection:', data);
     });
 
     socketRef.current.on('connect_error', (err) => {
-      console.error('❌ Connection error:', err.message);
+      console.error('❌ SOCKET CONNECTION ERROR:');
+      console.error('   Message:', err.message);
+      console.error('   Type:', err.type || 'unknown');
+      console.error('   Description:', err.description || 'none');
+      console.error('   Context:', err.context || 'none');
+      
       setConnected(false);
+      setConnectionStatus('error');
+      
+      // Auto-retry after delay
+      const newRetryCount = retryCount + 1;
+      setRetryCount(newRetryCount);
+      
+      if (newRetryCount <= 5) {
+        console.log(`🔄 Retrying connection (attempt ${newRetryCount}/5) in 3s...`);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          initializeSocket();
+        }, 3000);
+      } else {
+        console.error('🚫 Max retries reached. Please check server.');
+        setConnectionStatus('failed');
+      }
     });
 
-    socketRef.current.on('disconnect', () => {
-      console.log('🔌 Disconnected from server');
+    socketRef.current.on('disconnect', (reason) => {
+      console.log('🔌 SOCKET DISCONNECTED. Reason:', reason);
       setConnected(false);
+      setConnectionStatus('disconnected');
+      
+      if (reason === 'io server disconnect') {
+        // Server initiated disconnect, need to manually reconnect
+        console.log('🔄 Server disconnected us, reconnecting...');
+        setTimeout(() => {
+          socketRef.current.connect();
+        }, 1000);
+      }
     });
 
-    // Room events
+    socketRef.current.on('reconnect', (attemptNumber) => {
+      console.log(`🔄 Reconnected after ${attemptNumber} attempts`);
+      setConnectionStatus('connected');
+      setConnected(true);
+    });
+
+    socketRef.current.on('reconnect_attempt', (attemptNumber) => {
+      console.log(`🔄 Reconnection attempt ${attemptNumber}`);
+      setConnectionStatus(`reconnecting (attempt ${attemptNumber})`);
+    });
+
+    socketRef.current.on('reconnect_error', (error) => {
+      console.error('❌ Reconnection error:', error);
+    });
+
+    socketRef.current.on('reconnect_failed', () => {
+      console.error('🚫 Reconnection failed');
+      setConnectionStatus('failed');
+    });
+
+    socketRef.current.on('error', (error) => {
+      console.error('💥 Socket error:', error);
+    });
+
+    socketRef.current.on('ping', () => {
+      console.log('🏓 Ping received');
+    });
+
+    socketRef.current.on('pong', (data) => {
+      console.log('🏓 Pong received:', data);
+    });
+
+    // ========== ROOM EVENTS ==========
     socketRef.current.on('room_list', (roomList) => {
-      console.log('📋 Room list received:', roomList);
+      console.log('📋 Room list received:', roomList.length, 'rooms');
       setRooms(roomList);
     });
 
     socketRef.current.on('room_joined', (data) => {
-      console.log('🚪 Joined room:', data);
+      console.log('🚪 Joined room:', data.roomName, '(ID:', data.roomId + ')');
+      console.log('   Previous messages:', data.previousMessages?.length || 0);
       setCurrentRoom(data.roomId);
       setRoomName(data.roomName);
       setMessages(data.previousMessages || []);
@@ -77,9 +204,11 @@ const Chat = ({ username }) => {
     socketRef.current.on('join_error', (data) => {
       console.error('❌ Join error:', data.message);
       setJoinError(data.message);
+      alert(`Join error: ${data.message}`);
     });
 
     socketRef.current.on('room_update', (data) => {
+      console.log('🔄 Room update:', data.roomId, 'users:', data.userCount);
       setRooms(prev => prev.map(room => 
         room.id === data.roomId 
           ? { ...room, userCount: data.userCount, hasPassword: data.hasPassword }
@@ -88,22 +217,27 @@ const Chat = ({ username }) => {
     });
 
     socketRef.current.on('new_room', (newRoom) => {
-      console.log('📁 New room created:', newRoom);
+      console.log('📁 New room created:', newRoom.name);
       setRooms(prev => [...prev, newRoom]);
     });
 
     socketRef.current.on('auto_join', (data) => {
-      console.log('🤖 Auto-joining created room:', data);
+      console.log('🤖 Auto-joining created room:', data.roomName);
       joinRoomWithPassword(data.roomId, data.roomName, '');
     });
 
     socketRef.current.on('create_error', (data) => {
-      alert(`❌ Create room error: ${data.message}`);
+      console.error('❌ Create room error:', data.message);
+      alert(`Create room error: ${data.message}`);
     });
 
-    // Message events
+    // ========== MESSAGE EVENTS ==========
     socketRef.current.on('message', (message) => {
-      console.log('📨 Received message:', message);
+      console.log('📨 Message received:', {
+        from: message.username,
+        type: message.type,
+        text: message.type === 'text' ? message.text.substring(0, 50) + '...' : 'File: ' + message.fileName
+      });
       setMessages(prev => [...prev, message]);
       scrollToBottom();
     });
@@ -117,7 +251,6 @@ const Chat = ({ username }) => {
         time: new Date().toLocaleTimeString(),
         type: 'system'
       }]);
-      scrollToBottom();
     });
 
     socketRef.current.on('user_left', (data) => {
@@ -129,10 +262,8 @@ const Chat = ({ username }) => {
         time: new Date().toLocaleTimeString(),
         type: 'system'
       }]);
-      scrollToBottom();
     });
 
-    // Typing indicator
     socketRef.current.on('user_typing', (data) => {
       if (data.isTyping) {
         setTypingUsers(prev => {
@@ -145,36 +276,72 @@ const Chat = ({ username }) => {
       }
     });
 
-    // Cleanup
+    // Debug: Log all events
+    socketRef.current.onAny((event, ...args) => {
+      if (!event.includes('typing') && !event.includes('ping') && !event.includes('pong')) {
+        console.log(`📡 Socket event [${event}]:`, args.length > 0 ? args[0] : 'no data');
+      }
+    });
+  };
+
+  useEffect(() => {
+    console.log('🎯 Chat component mounted for user:', username);
+    console.log('📍 Current URL:', window.location.href);
+    
+    // Initialize socket connection
+    initializeSocket();
+
+    // Cleanup function
     return () => {
-      console.log('🧹 Cleaning up socket connection');
+      console.log('🧹 Cleaning up chat component...');
+      
+      // Clear timeouts
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      
+      // Disconnect socket
       if (socketRef.current) {
+        console.log('🔌 Disconnecting socket...');
+        socketRef.current.removeAllListeners();
         socketRef.current.disconnect();
       }
     };
   }, [username]);
 
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
   const scrollToBottom = () => {
     setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      messagesEndRef.current?.scrollIntoView({ 
+        behavior: 'smooth',
+        block: 'end' 
+      });
     }, 100);
   };
 
   const joinRoomWithPassword = (roomId, roomName, password) => {
-    if (socketRef.current && connected) {
-      console.log(`🔑 Joining room ${roomId} with password`);
-      socketRef.current.emit('join_room', { 
-        roomId, 
-        username, 
-        password 
-      });
-    } else {
-      alert('⚠️ Not connected to server. Please refresh the page.');
+    if (!socketRef.current || !connected) {
+      console.error('❌ Cannot join room: Socket not connected');
+      alert('Not connected to server. Please wait...');
+      return;
     }
+
+    console.log(`🔑 Joining room ${roomId} with password (hidden)`);
+    socketRef.current.emit('join_room', { 
+      roomId, 
+      username, 
+      password 
+    });
   };
 
   const joinRoom = (room) => {
-    console.log(`🚀 Attempting to join room: ${room.name}`);
+    console.log(`🚀 Attempting to join room: ${room.name} (${room.id})`);
     if (room.hasPassword) {
       console.log('🔒 Room requires password');
       setPasswordModal({
@@ -194,35 +361,49 @@ const Chat = ({ username }) => {
   };
 
   const createRoom = (roomData) => {
-    console.log('🏗️ Creating new room:', roomData);
+    console.log('🏗️ Creating new room:', roomData.roomName);
     if (socketRef.current && connected) {
       socketRef.current.emit('create_room', roomData);
     } else {
-      alert('⚠️ Not connected to server. Please refresh the page.');
+      console.error('❌ Cannot create room: Not connected');
+      alert('Not connected to server. Please wait for connection...');
     }
   };
 
   const sendMessage = (e) => {
     e.preventDefault();
-    if (input.trim() && socketRef.current && connected && currentRoom) {
-      console.log('📤 Sending message:', input.trim());
-      socketRef.current.emit('message', {
-        roomId: currentRoom,
-        text: input.trim()
-      });
-      setInput('');
-      stopTyping();
+    if (!input.trim()) {
+      console.log('⚠️ Message empty, not sending');
+      return;
     }
+    
+    if (!socketRef.current || !connected || !currentRoom) {
+      console.error('❌ Cannot send message: Not connected to room');
+      alert('Not connected to chat room. Please join a room first.');
+      return;
+    }
+
+    console.log('📤 Sending message:', input.trim().substring(0, 50) + '...');
+    socketRef.current.emit('message', {
+      roomId: currentRoom,
+      text: input.trim()
+    });
+    setInput('');
+    stopTyping();
   };
 
   const handleFileUpload = (fileData) => {
-    console.log('📎 File upload:', fileData.fileName);
-    if (socketRef.current && connected && currentRoom) {
-      socketRef.current.emit('file_upload', {
-        roomId: currentRoom,
-        ...fileData
-      });
+    console.log('📎 File upload initiated:', fileData.fileName);
+    if (!socketRef.current || !connected || !currentRoom) {
+      console.error('❌ Cannot upload file: Not connected to room');
+      alert('Not connected to chat room. Please join a room first.');
+      return;
     }
+
+    socketRef.current.emit('file_upload', {
+      roomId: currentRoom,
+      ...fileData
+    });
   };
 
   const handleTyping = () => {
@@ -255,6 +436,30 @@ const Chat = ({ username }) => {
       });
     }
     clearTimeout(typingTimeoutRef.current);
+  };
+
+  const manualReconnect = () => {
+    console.log('🔄 Manual reconnection requested');
+    setRetryCount(0);
+    setConnectionStatus('reconnecting');
+    initializeSocket();
+  };
+
+  const testConnection = () => {
+    console.log('🧪 Testing connection...');
+    console.log('Socket exists:', !!socketRef.current);
+    console.log('Socket connected:', socketRef.current?.connected);
+    console.log('Socket ID:', socketRef.current?.id);
+    
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('test_ping', { 
+        test: 'connection_test',
+        time: Date.now() 
+      });
+      alert('✅ Socket appears connected. Check console for details.');
+    } else {
+      alert('❌ Socket not connected. Check console for details.');
+    }
   };
 
   const renderMessage = (msg) => {
@@ -315,7 +520,6 @@ const Chat = ({ username }) => {
       );
     }
 
-    // Regular text message
     return (
       <div 
         key={msg.id} 
@@ -349,10 +553,44 @@ const Chat = ({ username }) => {
           <div className="avatar">{username.charAt(0).toUpperCase()}</div>
           <div className="user-details">
             <h3>{username}</h3>
-            <p className={`status ${connected ? 'online' : 'offline'}`}>
-              {connected ? '✅ Online' : '❌ Offline'}
-            </p>
+            <div className="connection-status-indicator">
+              <span className={`status-dot ${connectionStatus === 'connected' ? 'connected' : 
+                               connectionStatus === 'connecting' ? 'connecting' : 
+                               connectionStatus.includes('reconnecting') ? 'reconnecting' : 
+                               'disconnected'}`}></span>
+              <span className="status-text">
+                {connectionStatus === 'connected' ? '✅ Connected' :
+                 connectionStatus === 'connecting' ? '🔄 Connecting...' :
+                 connectionStatus.includes('reconnecting') ? '🔄 Reconnecting...' :
+                 connectionStatus === 'error' ? '❌ Connection Error' :
+                 connectionStatus === 'failed' ? '❌ Connection Failed' :
+                 '🔌 Disconnected'}
+              </span>
+            </div>
+            {retryCount > 0 && (
+              <div className="retry-count">
+                Retry attempts: {retryCount}
+              </div>
+            )}
           </div>
+        </div>
+
+        <div className="connection-controls">
+          <button 
+            onClick={manualReconnect}
+            className="reconnect-btn"
+            disabled={connectionStatus === 'connecting' || connectionStatus.includes('reconnecting')}
+          >
+            {connectionStatus === 'connecting' || connectionStatus.includes('reconnecting') 
+              ? 'Connecting...' 
+              : 'Reconnect'}
+          </button>
+          <button 
+            onClick={testConnection}
+            className="test-btn"
+          >
+            Test Connection
+          </button>
         </div>
 
         <RoomList
@@ -423,7 +661,7 @@ const Chat = ({ username }) => {
                     handleTyping();
                   }}
                   onBlur={stopTyping}
-                  placeholder="Type a message..."
+                  placeholder={connected && currentRoom ? "Type a message..." : "Connect to a room first..."}
                   disabled={!connected || !currentRoom}
                   autoFocus
                   onKeyDown={(e) => {
@@ -447,34 +685,32 @@ const Chat = ({ username }) => {
             <div className="welcome-message">
               <h2>👋 Welcome, {username}!</h2>
               <p>Select a chat room from the sidebar to start messaging.</p>
-              <div className="connection-status">
-                <p>Status: <span className={connected ? 'connected' : 'disconnected'}>
-                  {connected ? 'Connected to server ✓' : 'Connecting to server...'}
-                </span></p>
-              </div>
               
-              <div className="feature-highlights">
-                <h3>✨ Features:</h3>
-                <ul>
-                  <li>🔒 Password-protected rooms</li>
-                  <li>📎 File and image sharing</li>
-                  <li>💬 Multiple chat rooms</li>
-                  <li>👥 Real-time user presence</li>
-                  <li>✏️ Typing indicators</li>
-                  <li>💾 Message history</li>
-                </ul>
-              </div>
-
-              {!connected && (
-                <div className="connection-help">
-                  <p>If connection fails:</p>
-                  <ol>
-                    <li>Check if backend server is running</li>
-                    <li>Refresh the page</li>
-                    <li>Check browser console for errors (F12)</li>
-                  </ol>
+              <div className="connection-debug">
+                <h3>🔧 Connection Status</h3>
+                <div className="debug-info">
+                  <p><strong>Status:</strong> <span className={connectionStatus === 'connected' ? 'debug-success' : 'debug-error'}>
+                    {connectionStatus}
+                  </span></p>
+                  <p><strong>Retry Count:</strong> {retryCount}</p>
+                  <p><strong>Socket:</strong> {socketRef.current ? 'Initialized' : 'Not initialized'}</p>
+                  <p><strong>Connected:</strong> {connected ? 'Yes' : 'No'}</p>
+                  <p><strong>Environment URL:</strong> {import.meta.env.VITE_SOCKET_URL || 'Not set'}</p>
                 </div>
-              )}
+                
+                {!connected && (
+                  <div className="troubleshooting">
+                    <h4>🔍 Troubleshooting</h4>
+                    <ol>
+                      <li>Make sure backend server is running (check terminal)</li>
+                      <li>Check if port 3000 is accessible</li>
+                      <li>Try the "Reconnect" button above</li>
+                      <li>Check browser console (F12) for errors</li>
+                      <li>Make sure CORS is configured on backend</li>
+                    </ol>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

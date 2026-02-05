@@ -26,5 +26,10 @@
     "creator": "ibraheem",
     "users": [],
     "messages": []
+  },
+  "undefined": {
+    "password": null,
+    "users": [],
+    "messages": []
   }
 }

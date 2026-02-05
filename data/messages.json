@@ -2,5 +2,23 @@
   "general": [],
   "random": [],
   "tech": [],
-  "ajeeb": []
+  "ajeeb": [
+    {
+      "id": 1770296731676.7144,
+      "username": "bobby",
+      "text": "hi",
+      "time": "6:05:31 PM",
+      "timestamp": 1770296731700,
+      "type": "text"
+    },
+    {
+      "id": 1770296736578.571,
+      "username": "tuti@gmail.com",
+      "text": "hahahaha",
+      "time": "6:05:36 PM",
+      "timestamp": 1770296736578,
+      "type": "text"
+    }
+  ],
+  "undefined": []
 }
