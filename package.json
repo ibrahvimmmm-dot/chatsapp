@@ -1,20 +1,13 @@
 {
-    "name": "chatsapp-fullstack",
+    "name": "chatsapp",
     "version": "1.0.0",
-    "description": "Full-stack chat application with Socket.IO",
-    "private": true,
     "scripts": {
-      "install-all": "cd backend && npm install && cd ../frontend && npm install",
-      "build": "cd frontend && npm run build",
+      "build": "cd frontend && npm install && npm run build",
       "start": "cd backend && npm start",
-      "dev:backend": "cd backend && npm run dev",
-      "dev:frontend": "cd frontend && npm run dev",
-      "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\""
+      "dev": "concurrently \"cd backend && npm run dev\" \"cd frontend && npm run dev\"",
+      "install:all": "cd backend && npm install && cd ../frontend && npm install"
     },
     "devDependencies": {
       "concurrently": "^8.0.0"
-    },
-    "engines": {
-      "node": ">=16.0.0"
     }
   }

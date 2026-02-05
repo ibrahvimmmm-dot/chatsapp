@@ -1,0 +1,18 @@
+[phases.setup]
+cmds = [
+  "echo 'Setting up environment...'",
+  "cd backend && npm install",
+  "cd ../frontend && npm install"
+]
+
+[phases.build]
+cmds = [
+  "echo 'Building frontend...'",
+  "cd frontend && npm run build"
+]
+
+[start]
+cmd = "cd backend && npm start"
+
+[deploy]
+cmd = "cd backend && npm start"
