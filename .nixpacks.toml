@@ -1,7 +1,7 @@
 [phases.setup]
 cmds = [
-  "cd backend && npm install",
-  "cd ../frontend && npm install"
+  "cd backend && npm ci --only=production",
+  "cd ../frontend && npm ci"
 ]
 
 [phases.build]
@@ -11,3 +11,7 @@ cmds = [
 
 [start]
 cmd = "cd backend && npm start"
+
+[deploy]
+healthcheckPath = "/api/health"
+healthcheckTimeout = 30
