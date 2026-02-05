@@ -1,20 +1,21 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import io from 'socket.io-client';
 import './App.css';
 
-// Get backend URL based on environment
+// Determine backend URL based on environment
 const getBackendUrl = () => {
   // In production, backend serves frontend from same origin
   if (import.meta.env.PROD) {
     return window.location.origin;
   }
-  // In development, use environment variable or default
+  // In development, use localhost:3000
   return import.meta.env.VITE_API_URL || 'http://localhost:3000';
 };
 
 const BACKEND_URL = getBackendUrl();
 
 function App() {
+  // State variables
   const [socket, setSocket] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [connectionError, setConnectionError] = useState('');
@@ -25,148 +26,128 @@ function App() {
   const [currentRoom, setCurrentRoom] = useState('');
   const [newRoomName, setNewRoomName] = useState('');
   const [userStatus, setUserStatus] = useState('disconnected');
-  const [connectionDetails, setConnectionDetails] = useState({});
+  const [isRegistered, setIsRegistered] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+  
+  // Refs
   const messagesEndRef = useRef(null);
+  const usernameInputRef = useRef(null);
+  const messageInputRef = useRef(null);
+  const roomNameInputRef = useRef(null);
 
   // Initialize socket connection
   useEffect(() => {
-    console.log('🔌 Connecting to:', BACKEND_URL);
-    console.log('Environment:', import.meta.env.MODE);
+    console.log('🔌 Connecting to backend:', BACKEND_URL);
     
     const newSocket = io(BACKEND_URL, {
-      transports: ['polling', 'websocket'],
+      transports: ['polling', 'websocket'], // Polling first for better compatibility
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
       timeout: 20000,
-      autoConnect: true,
-      forceNew: false,
-      withCredentials: false
+      withCredentials: true,
+      autoConnect: true
     });
 
+    // ===== CONNECTION EVENTS =====
     newSocket.on('connect', () => {
-      console.log('✅ Socket.IO Connected!', {
-        id: newSocket.id,
-        transport: newSocket.io.engine.transport.name,
-        url: BACKEND_URL
-      });
-      
+      console.log('✅ Socket.IO Connected! ID:', newSocket.id);
       setIsConnected(true);
       setConnectionError('');
       setUserStatus('connected');
-      setConnectionDetails({
-        id: newSocket.id,
-        transport: newSocket.io.engine.transport.name,
-        connectedAt: new Date().toISOString()
-      });
-    });
-
-    newSocket.on('connected', (data) => {
-      console.log('Server welcome:', data);
-      setUserStatus('ready');
     });
 
     newSocket.on('connect_error', (error) => {
-      console.error('❌ Connection error:', {
-        message: error.message,
-        description: error.description,
-        type: error.type
-      });
-      
+      console.error('❌ Connection error:', error.message);
       setIsConnected(false);
       setConnectionError(`Connection failed: ${error.message}`);
       setUserStatus('error');
-      
-      // Try reconnection
-      setTimeout(() => {
-        if (newSocket && !newSocket.connected) {
-          console.log('Attempting reconnection...');
-          newSocket.connect();
-        }
-      }, 2000);
     });
 
     newSocket.on('disconnect', (reason) => {
       console.log('⚠️ Disconnected:', reason);
       setIsConnected(false);
       setUserStatus('disconnected');
-      
-      if (reason === 'io server disconnect') {
-        // Server disconnected, try to reconnect
-        setTimeout(() => {
-          newSocket.connect();
-        }, 1000);
-      }
+    });
+
+    // ===== CHAT EVENTS =====
+    newSocket.on('welcome', (data) => {
+      console.log('👋 Server welcome:', data);
+      setUserStatus('ready');
     });
 
     newSocket.on('user_registered', (data) => {
-      console.log('User registered:', data);
-      setUserStatus('registered');
-    });
-
-    newSocket.on('receive_message', (msg) => {
-      console.log('Message received:', msg);
-      setMessages(prev => [...prev, msg]);
-    });
-
-    newSocket.on('room_history', (data) => {
-      console.log('Room history:', data);
-      setMessages(data.messages || []);
+      console.log('✅ User registered:', data);
+      if (data.success) {
+        setIsRegistered(true);
+        setCurrentUser(data);
+        setUserStatus('registered');
+        // Auto-focus room input after registration
+        if (roomNameInputRef.current) {
+          setTimeout(() => roomNameInputRef.current.focus(), 100);
+        }
+      }
     });
 
     newSocket.on('rooms_list', (data) => {
-      console.log('Rooms list updated:', data);
-      setRooms(data);
+      console.log('🚪 Rooms list:', data);
+      setRooms(data || []);
+    });
+
+    newSocket.on('room_joined', (data) => {
+      console.log('✅ Joined room:', data);
+      setMessages(data.history || []);
+      setUserStatus('in_room');
+      // Auto-focus message input
+      if (messageInputRef.current) {
+        setTimeout(() => messageInputRef.current.focus(), 100);
+      }
+    });
+
+    newSocket.on('new_message', (msg) => {
+      console.log('📨 New message:', msg);
+      setMessages(prev => [...prev, msg]);
     });
 
     newSocket.on('user_joined', (data) => {
-      console.log('User joined room:', data);
+      console.log('👤 User joined:', data);
       setMessages(prev => [...prev, {
-        id: `sys-${Date.now()}`,
+        id: Date.now() + '-system-join',
         type: 'system',
-        message: `${data.user} joined the room`,
-        timestamp: new Date().toISOString()
+        message: data.message || `${data.user} joined the room`,
+        timestamp: data.timestamp
       }]);
-      
-      // Update room user count
-      setRooms(prev => prev.map(room => 
-        room.name === data.room 
-          ? { ...room, userCount: data.userCount }
-          : room
-      ));
     });
 
     newSocket.on('user_left', (data) => {
-      console.log('User left room:', data);
+      console.log('👋 User left:', data);
       setMessages(prev => [...prev, {
-        id: `sys-${Date.now()}`,
+        id: Date.now() + '-system-left',
         type: 'system',
-        message: `${data.user} left the room`,
-        timestamp: new Date().toISOString()
+        message: data.message || `${data.user} left the room`,
+        timestamp: data.timestamp
       }]);
-      
-      // Update room user count
-      setRooms(prev => prev.map(room => 
-        room.name === data.room 
-          ? { ...room, userCount: data.userCount }
-          : room
-      ));
     });
 
     newSocket.on('error', (error) => {
-      console.error('Socket error:', error);
+      console.error('❌ Socket error:', error);
       alert(`Error: ${error.message}`);
     });
 
-    newSocket.on('pong', (data) => {
-      console.log('Pong received:', data);
+    newSocket.on('test_response', (data) => {
+      console.log('✅ Test response:', data);
+      alert(`Server test successful: ${data.response}`);
+    });
+
+    newSocket.on('user_info', (data) => {
+      console.log('👤 User info:', data);
     });
 
     setSocket(newSocket);
 
+    // Cleanup function
     return () => {
-      console.log('Cleaning up socket connection');
+      console.log('🔌 Cleaning up socket connection');
       if (newSocket) {
         newSocket.disconnect();
       }
@@ -178,153 +159,289 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Fetch rooms when connected
+  // Auto-focus username input on load
   useEffect(() => {
-    if (isConnected && socket) {
-      socket.emit('get_rooms');
+    if (!username && usernameInputRef.current) {
+      usernameInputRef.current.focus();
     }
-  }, [isConnected, socket]);
+  }, [username]);
 
-  const handleSetUsername = () => {
-    if (username.trim() && socket) {
-      socket.emit('register_user', username.trim());
-      setUserStatus('registering');
+  // Handle username submission
+  const handleSetUsername = useCallback(() => {
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername) {
+      alert('Please enter a username');
+      return;
     }
-  };
-
-  const handleCreateRoom = () => {
-    if (newRoomName.trim() && socket) {
-      socket.emit('join_room', newRoomName.trim());
-      setCurrentRoom(newRoomName.trim());
-      setNewRoomName('');
+    
+    if (!socket || !isConnected) {
+      alert('Not connected to server. Please wait...');
+      return;
     }
-  };
+    
+    console.log('📝 Registering user:', trimmedUsername);
+    socket.emit('register_user', trimmedUsername);
+    setUserStatus('registering');
+  }, [username, socket, isConnected]);
 
-  const handleJoinRoom = (roomName) => {
-    if (socket) {
-      socket.emit('join_room', roomName);
-      setCurrentRoom(roomName);
-      setMessages([]);
+  // Handle username input key press
+  const handleUsernameKeyPress = useCallback((e) => {
+    if (e.key === 'Enter') {
+      handleSetUsername();
     }
-  };
+  }, [handleSetUsername]);
 
-  const handleSendMessage = () => {
-    if (message.trim() && currentRoom && socket && isConnected) {
-      socket.emit('send_message', {
-        room: currentRoom,
-        message: message.trim()
-      });
-      setMessage('');
+  // Create or join room
+  const handleCreateRoom = useCallback(() => {
+    const trimmedRoomName = newRoomName.trim();
+    
+    if (!trimmedRoomName) {
+      alert('Please enter a room name');
+      return;
     }
-  };
-
-  const handleLeaveRoom = () => {
-    if (currentRoom && socket) {
-      socket.emit('leave_room', currentRoom);
-      setCurrentRoom('');
-      setMessages([]);
+    
+    if (!socket || !isConnected) {
+      alert('Not connected to server');
+      return;
     }
-  };
-
-  const handleGetRooms = () => {
-    if (socket) {
-      socket.emit('get_rooms');
+    
+    if (!isRegistered) {
+      alert('Please set a username first!');
+      if (usernameInputRef.current) {
+        usernameInputRef.current.focus();
+      }
+      return;
     }
-  };
+    
+    console.log('🚪 Creating/joining room:', trimmedRoomName);
+    socket.emit('join_room', trimmedRoomName);
+    setCurrentRoom(trimmedRoomName);
+    setNewRoomName('');
+  }, [newRoomName, socket, isConnected, isRegistered]);
 
-  const handleTestConnection = () => {
-    if (socket) {
-      socket.emit('ping', { clientTime: Date.now(), test: 'connection' });
-      alert('Ping sent to server. Check console for response.');
+  // Handle room name input key press
+  const handleRoomNameKeyPress = useCallback((e) => {
+    if (e.key === 'Enter') {
+      handleCreateRoom();
     }
-  };
+  }, [handleCreateRoom]);
 
-  const handleReconnect = () => {
-    if (socket) {
-      socket.disconnect();
-      setTimeout(() => {
-        socket.connect();
-      }, 500);
+  // Join existing room
+  const handleJoinRoom = useCallback((roomName) => {
+    if (!socket || !isConnected) {
+      alert('Not connected to server');
+      return;
     }
-  };
+    
+    if (!isRegistered) {
+      alert('Please set a username first!');
+      if (usernameInputRef.current) {
+        usernameInputRef.current.focus();
+      }
+      return;
+    }
+    
+    console.log('🚪 Joining room:', roomName);
+    socket.emit('join_room', roomName);
+    setCurrentRoom(roomName);
+  }, [socket, isConnected, isRegistered]);
 
-  const formatTime = (timestamp) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit',
-      hour12: true 
+  // Send message
+  const handleSendMessage = useCallback(() => {
+    const trimmedMessage = message.trim();
+    
+    if (!trimmedMessage) {
+      alert('Please enter a message');
+      return;
+    }
+    
+    if (!socket || !isConnected) {
+      alert('Not connected to server');
+      return;
+    }
+    
+    if (!isRegistered) {
+      alert('Please set a username first!');
+      return;
+    }
+    
+    if (!currentRoom) {
+      alert('Please join a room first!');
+      return;
+    }
+    
+    console.log('💬 Sending message to', currentRoom, ':', trimmedMessage);
+    socket.emit('send_message', {
+      room: currentRoom,
+      message: trimmedMessage
     });
-  };
+    
+    // Clear input and refocus
+    setMessage('');
+    if (messageInputRef.current) {
+      messageInputRef.current.focus();
+    }
+  }, [message, currentRoom, socket, isConnected, isRegistered]);
+
+  // Handle message input key press
+  const handleMessageKeyPress = useCallback((e) => {
+    if (e.key === 'Enter') {
+      handleSendMessage();
+    }
+  }, [handleSendMessage]);
+
+  // Leave current room
+  const handleLeaveRoom = useCallback(() => {
+    if (!socket || !currentRoom) return;
+    
+    console.log('🚪 Leaving room:', currentRoom);
+    socket.emit('leave_room', currentRoom);
+    setCurrentRoom('');
+    setMessages([]);
+    setUserStatus('registered');
+  }, [socket, currentRoom]);
+
+  // Refresh rooms list
+  const handleGetRooms = useCallback(() => {
+    if (socket && isConnected) {
+      console.log('🔄 Refreshing rooms list');
+      socket.emit('get_rooms');
+    }
+  }, [socket, isConnected]);
+
+  // Test connection
+  const handleTestConnection = useCallback(() => {
+    if (socket) {
+      console.log('🔍 Testing connection...');
+      socket.emit('test', { 
+        message: 'Connection test from frontend',
+        timestamp: Date.now() 
+      });
+    }
+  }, [socket]);
+
+  // Ping server
+  const handlePing = useCallback(() => {
+    if (socket) {
+      socket.emit('ping');
+      socket.once('pong', (data) => {
+        alert(`Pong! Server time: ${new Date(data.timestamp).toLocaleTimeString()}`);
+      });
+    }
+  }, [socket]);
+
+  // Reconnect
+  const handleReconnect = useCallback(() => {
+    if (socket) {
+      console.log('🔄 Attempting to reconnect...');
+      socket.connect();
+    }
+  }, [socket]);
+
+  // Format time for display
+  const formatTime = useCallback((timestamp) => {
+    try {
+      return new Date(timestamp).toLocaleTimeString([], { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: true 
+      });
+    } catch (e) {
+      return '';
+    }
+  }, []);
 
   return (
     <div className="app">
+      {/* ===== SIDEBAR ===== */}
       <div className="sidebar">
+        {/* User Section */}
         <div className="user-section">
           <h2>💬 Chat App</h2>
           
           <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
             <span className="status-dot"></span>
-            {isConnected ? '✅ Connected' : '❌ Disconnected'}
-            {connectionError && <div className="error-message">{connectionError}</div>}
+            <span className="status-text">
+              {isConnected ? '✅ Connected' : '❌ Disconnected'}
+            </span>
+            {connectionError && (
+              <div className="error-message">{connectionError}</div>
+            )}
           </div>
           
-          {!username ? (
+          {/* Username Input / User Info */}
+          {!isRegistered ? (
             <div className="username-input">
               <input
+                ref={usernameInputRef}
                 type="text"
                 placeholder="Enter your username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSetUsername()}
+                onKeyPress={handleUsernameKeyPress}
                 disabled={!isConnected}
+                maxLength={20}
               />
               <button 
                 onClick={handleSetUsername}
-                disabled={!isConnected || !username.trim()}
+                disabled={!username.trim() || !isConnected || userStatus === 'registering'}
+                className="register-btn"
               >
-                Set Username
+                {userStatus === 'registering' ? 'Registering...' : 'Register'}
               </button>
             </div>
           ) : (
             <div className="user-info">
-              <span className="user-avatar">👤</span>
+              <div className="user-avatar">👤</div>
               <div className="user-details">
-                <strong>{username}</strong>
-                <span className="user-status">{userStatus}</span>
+                <h3>{currentUser?.username || username}</h3>
+                <div className="user-stats">
+                  <span className="stat-badge">Connected</span>
+                  <span className="stat-badge">Room: {currentRoom ? currentRoom : 'None'}</span>
+                </div>
               </div>
             </div>
           )}
           
+          {/* Server Info */}
           <div className="server-info">
             <div className="info-row">
               <span className="info-label">Backend:</span>
               <code className="info-value">{BACKEND_URL}</code>
             </div>
             <div className="info-row">
-              <span className="info-label">Mode:</span>
-              <span className="info-value">{import.meta.env.MODE}</span>
+              <span className="info-label">Status:</span>
+              <span className={`info-value ${userStatus}`}>{userStatus}</span>
             </div>
             <div className="info-row">
-              <span className="info-label">Socket ID:</span>
-              <span className="info-value">{connectionDetails.id || 'Not connected'}</span>
-            </div>
-            <div className="info-row">
-              <span className="info-label">Transport:</span>
-              <span className="info-value">{connectionDetails.transport || 'None'}</span>
+              <span className="info-label">Socket:</span>
+              <span className="info-value">
+                {socket?.id ? socket.id.slice(0, 8) + '...' : 'Not connected'}
+              </span>
             </div>
             
+            {/* Action Buttons */}
             <div className="action-buttons">
               <button 
-                onClick={handleTestConnection} 
-                className="test-btn"
+                onClick={handleTestConnection}
                 disabled={!isConnected}
+                className="action-btn test-btn"
+                title="Test server connection"
               >
-                Test Connection
+                Test
               </button>
               <button 
-                onClick={handleReconnect} 
-                className="reconnect-btn"
+                onClick={handlePing}
+                disabled={!isConnected}
+                className="action-btn ping-btn"
+                title="Ping server"
+              >
+                Ping
+              </button>
+              <button 
+                onClick={handleReconnect}
+                className="action-btn reconnect-btn"
+                title="Reconnect to server"
               >
                 Reconnect
               </button>
@@ -332,40 +449,49 @@ function App() {
           </div>
         </div>
 
+        {/* Rooms Section */}
         <div className="rooms-section">
-          <h3>📁 Chat Rooms</h3>
-          
-          <button 
-            onClick={handleGetRooms} 
-            className="refresh-btn" 
-            disabled={!isConnected}
-            title="Refresh rooms list"
-          >
-            🔄 Refresh Rooms
-          </button>
-          
-          <div className="create-room">
-            <input
-              type="text"
-              placeholder="New room name"
-              value={newRoomName}
-              onChange={(e) => setNewRoomName(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleCreateRoom()}
-              disabled={!isConnected}
-            />
+          <div className="section-header">
+            <h3>📁 Chat Rooms</h3>
             <button 
-              onClick={handleCreateRoom} 
-              disabled={!isConnected || !newRoomName.trim()}
+              onClick={handleGetRooms}
+              disabled={!isConnected}
+              className="icon-btn refresh-btn"
+              title="Refresh rooms list"
             >
-              Create
+              🔄
             </button>
           </div>
           
+          {/* Create Room */}
+          <div className="create-room">
+            <input
+              ref={roomNameInputRef}
+              type="text"
+              placeholder="Enter room name"
+              value={newRoomName}
+              onChange={(e) => setNewRoomName(e.target.value)}
+              onKeyPress={handleRoomNameKeyPress}
+              disabled={!isConnected || !isRegistered}
+            />
+            <button 
+              onClick={handleCreateRoom}
+              disabled={!newRoomName.trim() || !isConnected || !isRegistered}
+              className="create-btn"
+            >
+              Create/Join
+            </button>
+          </div>
+          
+          {/* Rooms List */}
           <div className="rooms-list">
             {rooms.length === 0 ? (
-              <div className="no-rooms">
-                <p>No rooms available</p>
-                <p className="hint">Create the first room!</p>
+              <div className="empty-state">
+                <div className="empty-icon">💬</div>
+                <p className="empty-title">No rooms yet</p>
+                <p className="empty-subtitle">
+                  {isRegistered ? 'Create the first room!' : 'Register to create rooms'}
+                </p>
               </div>
             ) : (
               rooms.map(room => (
@@ -373,17 +499,23 @@ function App() {
                   key={room.name}
                   className={`room-item ${currentRoom === room.name ? 'active' : ''}`}
                   onClick={() => handleJoinRoom(room.name)}
-                  title={`${room.userCount} users, ${room.messageCount} messages`}
                 >
-                  <div className="room-info">
-                    <span className="room-name"># {room.name}</span>
+                  <div className="room-icon">#</div>
+                  <div className="room-details">
+                    <span className="room-name">{room.name}</span>
                     <div className="room-stats">
-                      <span className="room-users">👥 {room.userCount}</span>
-                      <span className="room-messages">💬 {room.messageCount}</span>
+                      <span className="room-stat">
+                        <span className="stat-icon">👤</span>
+                        {room.userCount || 0}
+                      </span>
+                      <span className="room-stat">
+                        <span className="stat-icon">💬</span>
+                        {room.messageCount || 0}
+                      </span>
                     </div>
                   </div>
                   {currentRoom === room.name && (
-                    <span className="active-indicator" title="Currently in this room">●</span>
+                    <div className="active-indicator">●</div>
                   )}
                 </div>
               ))
@@ -391,75 +523,72 @@ function App() {
           </div>
         </div>
 
-        <div className="troubleshooting">
-          <h4>🔧 Connection Info</h4>
-          <div className="info-grid">
-            <div className="info-item">
-              <span className="info-label">Status:</span>
-              <span className={`info-value ${isConnected ? 'success' : 'error'}`}>
-                {isConnected ? 'Connected' : 'Disconnected'}
-              </span>
+        {/* Connection Panel */}
+        <div className="connection-panel">
+          <h4>📊 Connection Status</h4>
+          <div className="status-grid">
+            <div className="status-item">
+              <span className="status-label">Backend:</span>
+              <span className="status-value success">{isConnected ? 'Online' : 'Offline'}</span>
             </div>
-            <div className="info-item">
-              <span className="info-label">User:</span>
-              <span className="info-value">{username || 'Not set'}</span>
+            <div className="status-item">
+              <span className="status-label">User:</span>
+              <span className="status-value">{isRegistered ? 'Registered' : 'Guest'}</span>
             </div>
-            <div className="info-item">
-              <span className="info-label">Rooms:</span>
-              <span className="info-value">{rooms.length}</span>
+            <div className="status-item">
+              <span className="status-label">Current Room:</span>
+              <span className="status-value">{currentRoom || 'None'}</span>
             </div>
-            <div className="info-item">
-              <span className="info-label">Environment:</span>
-              <span className="info-value">{import.meta.env.MODE}</span>
+            <div className="status-item">
+              <span className="status-label">Messages:</span>
+              <span className="status-value">{messages.filter(m => m.type !== 'system').length}</span>
             </div>
           </div>
-          
-          {connectionError && (
-            <div className="error-box">
-              <div className="error-header">
-                <span className="error-icon">⚠️</span>
-                <strong>Connection Error</strong>
-              </div>
-              <p className="error-detail">{connectionError}</p>
-              <button onClick={handleReconnect} className="reconnect-btn-small">
-                🔄 Try Again
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
+      {/* ===== CHAT AREA ===== */}
       <div className="chat-area">
         {currentRoom ? (
           <>
+            {/* Chat Header */}
             <div className="chat-header">
               <div className="chat-title">
-                <h3># {currentRoom}</h3>
-                <div className="room-meta">
-                  <span className="room-user-count">
-                    👥 {rooms.find(r => r.name === currentRoom)?.userCount || 0} online
+                <h2># {currentRoom}</h2>
+                <div className="room-info">
+                  <span className="room-meta">
+                    <span className="meta-icon">👤</span>
+                    {rooms.find(r => r.name === currentRoom)?.userCount || 0} online
                   </span>
-                  <span className="room-message-count">
-                    💬 {messages.filter(m => m.type !== 'system').length} messages
+                  <span className="room-meta">
+                    <span className="meta-icon">💬</span>
+                    {messages.filter(m => m.type !== 'system').length} messages
                   </span>
                 </div>
               </div>
-              <button onClick={handleLeaveRoom} className="leave-btn" title="Leave this room">
+              <button 
+                onClick={handleLeaveRoom}
+                className="leave-btn"
+                title="Leave room"
+              >
                 Leave Room
               </button>
             </div>
             
+            {/* Messages Container */}
             <div className="messages-container">
               {messages.length === 0 ? (
-                <div className="empty-messages">
-                  <div className="empty-icon">💬</div>
-                  <h4>No messages yet</h4>
-                  <p className="hint">Start the conversation!</p>
-                  <p className="sub-hint">Messages will appear here</p>
+                <div className="empty-chat">
+                  <div className="empty-chat-icon">💭</div>
+                  <h3>No messages yet</h3>
+                  <p>Be the first to start the conversation!</p>
                 </div>
               ) : (
                 messages.map((msg) => (
-                  <div key={msg.id} className={`message ${msg.type === 'system' ? 'system' : ''}`}>
+                  <div 
+                    key={msg.id} 
+                    className={`message ${msg.type === 'system' ? 'system' : ''} ${msg.userId === socket?.id ? 'own' : ''}`}
+                  >
                     {msg.type === 'system' ? (
                       <div className="system-message">
                         <span className="system-icon">📢</span>
@@ -469,13 +598,11 @@ function App() {
                     ) : (
                       <>
                         <div className="message-header">
-                          <div className="message-user-info">
-                            <span className="message-user">
-                              {msg.user}
-                              {msg.userId === socket?.id && <span className="you-tag">(you)</span>}
-                            </span>
-                            <span className="message-time">{formatTime(msg.timestamp)}</span>
-                          </div>
+                          <span className="message-user">
+                            {msg.user}
+                            {msg.userId === socket?.id && <span className="you-badge">You</span>}
+                          </span>
+                          <span className="message-time">{formatTime(msg.timestamp)}</span>
                         </div>
                         <div className="message-content">{msg.message}</div>
                       </>
@@ -486,32 +613,41 @@ function App() {
               <div ref={messagesEndRef} />
             </div>
             
-            <div className="message-input">
+            {/* Message Input */}
+            <div className="message-input-area">
               <input
+                ref={messageInputRef}
                 type="text"
-                placeholder={isConnected ? `Message #${currentRoom}...` : "Connecting to server..."}
+                placeholder={
+                  !isConnected ? "Connecting to server..." :
+                  !isRegistered ? "Please register to chat" :
+                  !currentRoom ? "Join a room to chat" :
+                  "Type your message here..."
+                }
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-                disabled={!isConnected || !currentRoom}
+                onKeyPress={handleMessageKeyPress}
+                disabled={!isConnected || !isRegistered || !currentRoom}
+                className="message-input"
                 maxLength={500}
               />
               <button 
                 onClick={handleSendMessage}
-                disabled={!message.trim() || !isConnected || !currentRoom}
+                disabled={!message.trim() || !isConnected || !isRegistered || !currentRoom}
                 className="send-btn"
-                title="Send message (Enter)"
+                title="Send message"
               >
                 Send
               </button>
             </div>
           </>
         ) : (
+          /* Welcome Screen */
           <div className="welcome-screen">
             <div className="welcome-content">
               <div className="welcome-header">
-                <h1>💬 Welcome to Chat App!</h1>
-                <p className="welcome-subtitle">Real-time messaging with Socket.IO</p>
+                <h1>Welcome to Chat App! 🎉</h1>
+                <p className="welcome-subtitle">Real-time chatting made simple and fun</p>
               </div>
               
               <div className="welcome-steps">
@@ -519,80 +655,84 @@ function App() {
                   <div className="step-number">1</div>
                   <div className="step-content">
                     <h4>Set Your Username</h4>
-                    <p>Enter a username in the sidebar to get started</p>
+                    <p>Enter a unique username in the sidebar to get started</p>
                   </div>
                 </div>
+                
                 <div className="step">
                   <div className="step-number">2</div>
                   <div className="step-content">
                     <h4>Join or Create a Room</h4>
-                    <p>Select an existing room or create a new one</p>
+                    <p>Select from existing rooms or create your own private space</p>
                   </div>
                 </div>
+                
                 <div className="step">
                   <div className="step-number">3</div>
                   <div className="step-content">
-                    <h4>Start Chatting</h4>
-                    <p>Send messages in real-time to everyone in the room</p>
+                    <h4>Start Chatting!</h4>
+                    <p>Send messages in real-time and enjoy the conversation</p>
                   </div>
                 </div>
               </div>
               
-              <div className="connection-panel">
-                <h3>🔌 Connection Status</h3>
-                <div className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}>
-                  <span className="indicator-dot"></span>
-                  {isConnected ? '✅ Connected to server' : '❌ Not connected to server'}
+              <div className="connection-card">
+                <h3>🔗 Connection Status</h3>
+                
+                <div className={`connection-status-badge ${isConnected ? 'connected' : 'disconnected'}`}>
+                  {isConnected ? '✅ Connected to Server' : '❌ Not Connected'}
                 </div>
                 
-                <div className="server-details">
-                  <div className="detail-row">
+                <div className="connection-details">
+                  <div className="detail">
                     <span className="detail-label">Backend Server:</span>
                     <code className="detail-value">{BACKEND_URL}</code>
                   </div>
-                  <div className="detail-row">
+                  
+                  <div className="detail">
                     <span className="detail-label">Socket Status:</span>
-                    <span className={`detail-value ${socket ? 'success' : 'error'}`}>
-                      {socket ? 'Initialized' : 'Not initialized'}
-                    </span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">Connection:</span>
-                    <span className={`detail-value ${isConnected ? 'success' : 'error'}`}>
-                      {isConnected ? '✅ Established' : '❌ Failed'}
+                    <span className={`detail-value ${socket ? 'ready' : 'not-ready'}`}>
+                      {socket ? 'Ready' : 'Not Ready'}
                     </span>
                   </div>
                   
-                  {connectionError && (
-                    <div className="error-details">
-                      <div className="error-title">
-                        <span className="error-icon">⚠️</span>
-                        <strong>Connection Error</strong>
-                      </div>
-                      <p className="error-message">{connectionError}</p>
-                      <button onClick={handleReconnect} className="reconnect-btn-large">
-                        🔄 Reconnect Now
-                      </button>
-                    </div>
-                  )}
+                  <div className="detail">
+                    <span className="detail-label">User Status:</span>
+                    <span className={`detail-value ${isRegistered ? 'registered' : 'guest'}`}>
+                      {isRegistered ? (currentUser?.username || username) : 'Guest'}
+                    </span>
+                  </div>
                 </div>
                 
-                <div className="quick-actions">
-                  <button 
-                    onClick={handleTestConnection} 
-                    className="action-btn"
-                    disabled={!isConnected}
-                  >
-                    Test Connection
-                  </button>
-                  <button 
-                    onClick={handleGetRooms} 
-                    className="action-btn" 
-                    disabled={!isConnected}
-                  >
-                    Load Rooms
-                  </button>
-                </div>
+                {connectionError && (
+                  <div className="error-card">
+                    <div className="error-header">
+                      <span className="error-icon">⚠️</span>
+                      <h4>Connection Error</h4>
+                    </div>
+                    <p className="error-message">{connectionError}</p>
+                    <div className="error-actions">
+                      <button onClick={handleReconnect} className="reconnect-btn-large">
+                        🔄 Try Reconnecting
+                      </button>
+                      <button onClick={handleTestConnection} className="test-btn-large">
+                        🔍 Test Connection
+                      </button>
+                    </div>
+                  </div>
+                )}
+                
+                {!connectionError && !isConnected && (
+                  <div className="connection-help">
+                    <p>If you're having trouble connecting:</p>
+                    <ol>
+                      <li>Make sure the backend server is running</li>
+                      <li>Check your internet connection</li>
+                      <li>Try refreshing the page</li>
+                      <li>Click "Reconnect" in the sidebar</li>
+                    </ol>
+                  </div>
+                )}
               </div>
             </div>
           </div>
