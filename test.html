@@ -1,0 +1,32 @@
+cat > test.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Basic Test</title>
+    <style>
+        body { font-family: Arial; padding: 40px; }
+        button { padding: 15px 30px; font-size: 18px; }
+    </style>
+</head>
+<body>
+    <h1 style="color: green;">✅ Basic HTML Test</h1>
+    <p>If you see this, HTML is loading.</p>
+    
+    <button onclick="
+        console.log('Button clicked!');
+        this.style.background = 'green';
+        this.textContent = 'Clicked!';
+    ">
+        Click to Test JavaScript
+    </button>
+    
+    <script>
+        console.log('✅ Script loaded successfully');
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('✅ DOM fully loaded');
+            document.body.innerHTML += '<p style="color: blue;">✅ JavaScript is working</p>';
+        });
+    </script>
+</body>
+</html>
+EOF
