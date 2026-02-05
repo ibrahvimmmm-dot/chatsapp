@@ -1,0 +1,8 @@
+[build]
+builder = "nixpacks"
+builderSettings = { buildCommand = "echo \"Building...\"" }
+
+[deploy]
+startCommand = "cd backend && npm start"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 30
